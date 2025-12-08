@@ -1,0 +1,461 @@
+<!-- JS LOGIC -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, query, where, orderBy, addDoc, increment, arrayUnion, serverTimestamp, writeBatch, onSnapshot, getDocs, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        
+        // ✅ NEW: Import Messaging functions
+        import { getMessaging, getToken } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging.js";
+
+        // ✅ Firebase Config (Kept exactly as requested)
+        const firebaseConfig = { 
+            apiKey: "AIzaSyAafXkJwyZ5F7Xuax0VktZ9cpqWD4oCvxU", 
+            authDomain: "tournament-97743.firebaseapp.com", 
+            databaseURL: "https://tournament-97743-default-rtdb.firebaseio.com",
+            projectId: "tournament-97743", 
+            storageBucket: "tournament-97743.firebasestorage.app",
+            messagingSenderId: "584797187828", 
+            appId: "1:584797187828:web:4c643f83dfd9b700adb8a1" 
+        };
+
+        const app = initializeApp(firebaseConfig); 
+        const auth = getAuth(app); 
+        const db = getFirestore(app);
+        
+        // ✅ NEW: Initialize Messaging
+        const messaging = getMessaging(app);
+
+        // --- DEFAULT AVATAR LIST ---
+        const defaultAvatars = [
+            "https://i.pinimg.com/736x/5c/84/42/5c84428d983d26ce85a84f946e4ce8ab.jpg",
+            "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTyAcF57Bqp8agckepgWzFwV0xBxe2gDcbChteoaL41YzUUL62kxx3hvsU&s=10",
+            "https://w0.peakpx.com/wallpaper/264/475/HD-wallpaper-profile-pic-girl-profile-thumbnail.jpg",
+            "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSy3WjPE0K2GQYxbNrMNm83QolhuPiom4owlQkhi7f66XXxnAHXBatc3JY&s=10",
+            "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR7TR-91MtVx3Zyg4mVGvbMchzouv9ajRiXeYEKWDmhRobPcNmPsT3Dhu8&s=10",
+            "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcToqJSrJs571Mn_CaYsV0M6pYVz3p5ygUPbEsR5wuZojA&s=10",
+            "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQy8-AqEVRQZDvyiWLka_22hAn2tyosADPj3o1gHV2_aQ&s=10",
+            "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSysX8k1gABg8LHF0QSukobgjnwgnxqX1Pqjcxx6AafbTLSGRq8560Mz8I&s=10"
+        ];
+
+        let currentUserData = null;
+        let sliderInterval = null;
+        let nivaRate = 10;
+        let payeerRate = 115;
+        let proofBotUrl = "";
+        let selMatch = null;
+        let allTournaments = [];
+        let joinedMatchIds = new Set();
+        let spinProcessing = false;
+        let currentRotation = 0;
+        let lastBackPress = 0;
+        let minW = 50; let maxW = 10000;
+        let currentHomeTab = 'BR';
+
+        window.showToast = (msg) => { const t = document.getElementById('toast-box'); if(t) { t.innerHTML = `<i class="fas fa-info-circle"></i> ${msg}`; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 3000); } else { alert(msg); } };
+        
+        window.nav = (pid) => { 
+            if(sliderInterval && pid !== 'page-home') { clearInterval(sliderInterval); sliderInterval = null; }
+            if(pid === 'page-home' && !sliderInterval) loadHomeData(); 
+
+            document.querySelectorAll('.page-section').forEach(e => e.classList.remove('active')); 
+            const target = document.getElementById(pid); 
+            if(target) target.classList.add('active'); 
+            if(document.querySelector('.drawer').style.transform === 'translateX(0px)') window.toggleDrawer(); 
+            if (pid === 'page-home') { history.pushState({page: 'home'}, '', '#home'); } else { history.pushState({page: pid}, '', '#' + pid.replace('page-', '')); } window.scrollTo(0,0); 
+        };
+
+        window.selectMethod = (el) => { document.querySelectorAll('.method-card').forEach(c => c.classList.remove('active')); el.classList.add('active'); el.querySelector('input').checked = true; window.calcConversion(); }
+        window.toggleAuth = () => { document.getElementById('login-form').classList.toggle('hidden'); document.getElementById('signup-form').classList.toggle('hidden'); };
+        window.toggleDrawer = () => { const d=document.querySelector('.drawer'), o=document.querySelector('.drawer-overlay'); if(d.style.transform==='translateX(0px)'){d.style.transform='translateX(-100%)';o.style.display='none';}else{d.style.transform='translateX(0px)';o.style.display='block';} };
+        window.closeModal = () => document.getElementById('modal-area').classList.add('hidden');
+        window.closeJoin = () => document.getElementById('join-modal').classList.add('hidden');
+        window.copyToClipboard = (t) => { if(navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(t).then(()=>showToast("কপি করা হয়েছে!")).catch(err=>console.error(err)); } else { let textArea = document.createElement("textarea"); textArea.value = t; document.body.appendChild(textArea); textArea.select(); document.execCommand("Copy"); textArea.remove(); showToast("কপি করা হয়েছে!"); } };
+        window.copyGenCode = () => { const code = document.getElementById('gen-team-code').innerText; window.copyToClipboard(code); }
+        window.copyCustomId = () => { if(currentUserData && currentUserData.customId) { window.copyToClipboard(currentUserData.customId); } }
+        window.copyReferCode = () => { if(currentUserData && currentUserData.referralCode) { window.copyToClipboard(currentUserData.referralCode); } }
+        window.closeTeamCodeModal = () => { document.getElementById('team-code-modal').classList.add('hidden'); nav('page-matches'); }
+
+        window.addEventListener('load', () => { history.pushState({page: 'home'}, '', ''); });
+        window.addEventListener('popstate', (event) => { const activeSection = document.querySelector('.page-section.active'); if (activeSection && activeSection.id !== 'page-home') { nav('page-home'); } else { const now = new Date().getTime(); if (now - lastBackPress < 2000) { if(confirm("আপনি কি অ্যাপটি বন্ধ করতে চান?")) { history.back(); } else { history.pushState({page: 'home'}, '', '#home'); } } else { lastBackPress = now; showToast("বাহির হতে আবার ব্যাক চাপুন"); history.pushState({page: 'home'}, '', '#home'); } } });
+
+        // ✅ NEW: Register Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('firebase-messaging-sw.js')
+            .then((registration) => {
+                console.log('✅ Service Worker Registered');
+            }).catch((err) => {
+                console.log('❌ Service Worker Failed', err);
+            });
+        }
+
+        // ✅ NEW: Function to Request Permission & Get Token
+        async function requestPermissionAndGetToken(uid) {
+            console.log('Requesting notification permission...');
+            try {
+                const permission = await Notification.requestPermission();
+                if (permission === 'granted') {
+                    console.log('Notification permission granted.');
+                    
+                    // Get Token
+                    const currentToken = await getToken(messaging, { 
+                        vapidKey: 'BKVqRDof4xyE2oZWEvMO3CSEsCQ9QPkbiT59bnJHQLWJ0ngm5I1pirwwTsNQ94AVR3fuWNeV6WPwhi5f5hsUFyQ' 
+                    });
+
+                    if (currentToken) {
+                        console.log('✅ FCM Token:', currentToken);
+                        // Save token to Firestore
+                        await setDoc(doc(db, "users", uid), { fcmToken: currentToken }, { merge: true });
+                        console.log('✅ Token saved to Firestore');
+                    } else {
+                        console.log('No registration token available. Request permission to generate one.');
+                    }
+                } else {
+                    console.log('❌ Notification permission denied');
+                }
+            } catch (err) {
+                console.log('An error occurred while retrieving token. ', err);
+            }
+        }
+
+        onAuthStateChanged(auth, async (user) => {
+            if(user) {
+                if (window.AppInventor) { window.AppInventor.setWebViewString(user.uid); }
+                
+                // ✅ NEW: Trigger FCM Logic on Login
+                requestPermissionAndGetToken(user.uid);
+
+                onSnapshot(doc(db,"users",user.uid), async d => {
+                    if(d.exists()){
+                        currentUserData = d.data();
+                        if(currentUserData.isBlocked) { alert("Blocked by Admin"); signOut(auth); return; }
+                        
+                        if(!currentUserData.photoURL) {
+                            const rand = defaultAvatars[Math.floor(Math.random() * defaultAvatars.length)];
+                            await setDoc(doc(db, "users", user.uid), { photoURL: rand }, { merge: true });
+                            currentUserData.photoURL = rand; 
+                        }
+                        
+                        if(!currentUserData.referralCode) {
+                             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+                             const code = Array(4).fill(0).map(()=>chars[Math.floor(Math.random()*chars.length)]).join('') + Math.floor(100 + Math.random() * 900);
+                             await setDoc(doc(db, "users", user.uid), { referralCode: code, totalRefers: 0, referEarn: 0 }, { merge: true });
+                        }
+                        if(!currentUserData.customId) {
+                             const newId = Math.floor(10000000000 + Math.random() * 90000000000).toString();
+                             await setDoc(doc(db, "users", user.uid), { customId: newId }, { merge: true }); return; 
+                        }
+                        
+                        const balEl = document.getElementById('header-bal'); if(balEl) balEl.innerText = currentUserData.balance || 0;
+                        const nameEl = document.getElementById('p-name'); if(nameEl) nameEl.innerText = currentUserData.fullName || currentUserData.username || "Gamer";
+                        const idEl = document.getElementById('p-custom-id'); if(idEl) idEl.innerText = currentUserData.customId;
+                        
+                        const dName = document.getElementById('d-name'); if(dName) dName.innerText = currentUserData.fullName || "Gamer";
+                        const dUid = document.getElementById('d-uid'); if(dUid) dUid.innerText = "ID: " + currentUserData.customId;
+                        const dPic = document.getElementById('d-pic'); if(dPic) dPic.src = currentUserData.photoURL || "https://via.placeholder.com/100";
+
+                        document.getElementById('my-refer-code').innerText = currentUserData.referralCode || "...";
+                        document.getElementById('total-refers').innerText = currentUserData.totalRefers || 0;
+                        document.getElementById('total-refer-earn').innerText = `৳${currentUserData.referEarn || 0}`;
+                        const imgEl = document.getElementById('p-pic'); if(imgEl) { imgEl.src = currentUserData.photoURL || "https://via.placeholder.com/100"; imgEl.onerror = function() { this.src = "https://via.placeholder.com/100"; }; }
+                        document.getElementById('auth-container').classList.add('hidden'); document.getElementById('app-container').classList.remove('hidden'); document.getElementById('loading-overlay').classList.add('hidden');
+                    } else { await signOut(auth); window.location.reload(); }
+                });
+                loadHomeData(); loadMyMatches(user.uid); loadNotifications(user.uid); window.loadPublicCoupons(); loadWithdrawHistory(user.uid); loadConfig(); loadBroadcasts(); loadBalanceLeaderboard(); loadReferralLeaderboard();
+            } else { document.getElementById('app-container').classList.add('hidden'); document.getElementById('auth-container').classList.remove('hidden'); document.getElementById('loading-overlay').classList.add('hidden'); joinedMatchIds.clear(); }
+        });
+        
+        window.login=async()=>{try{await signInWithEmailAndPassword(auth, document.getElementById('l-email').value, document.getElementById('l-pass').value);}catch(e){showToast("Invalid Credentials")}};
+        
+        window.register=async()=>{
+            try {
+                const fullName = document.getElementById('r-user').value; const email = document.getElementById('r-email').value; const pass = document.getElementById('r-pass').value; const referByCode = document.getElementById('r-refer').value.trim();
+                if(!fullName || !email || !pass) return showToast("Fill all fields");
+                
+                const generatedId = Math.floor(10000000000 + Math.random() * 90000000000).toString();
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+                const myReferCode = Array(4).fill(0).map(()=>chars[Math.floor(Math.random()*chars.length)]).join('') + Math.floor(100 + Math.random() * 900);
+                
+                const randomPic = defaultAvatars[Math.floor(Math.random() * defaultAvatars.length)];
+
+                let referrerUid = null;
+                if (referByCode) { const q = query(collection(db, "users"), where("referralCode", "==", referByCode)); const snap = await getDocs(q); if (!snap.empty) { referrerUid = snap.docs[0].id; } }
+                
+                const c = await createUserWithEmailAndPassword(auth, email, pass);
+                
+                const userData = { 
+                    fullName: fullName, 
+                    username: fullName, 
+                    email: email, 
+                    balance: 0, 
+                    uid: c.user.uid, 
+                    customId: generatedId, 
+                    referralCode: myReferCode, 
+                    totalRefers: 0, 
+                    referEarn: 0, 
+                    photoURL: randomPic, 
+                    createdAt: serverTimestamp() 
+                };
+                
+                if(referrerUid) { userData.referredBy = referrerUid; userData.referBonusPending = true; }
+                await setDoc(doc(db, "users", c.user.uid), userData); showToast("Success!");
+            } catch(e){ showToast(e.message); }
+        };
+
+        window.logout = () => { if (window.AppInventor) { window.AppInventor.setWebViewString("LOGOUT"); } signOut(auth); };
+
+        function loadConfig() {
+            onSnapshot(doc(db,"config","settings"), s=>{ 
+                if(s.exists()){ 
+                    const d=s.data(); 
+                    nivaRate=d.nivaCoinPrice||10; 
+                    payeerRate = d.payeerRate || 115; 
+                    proofBotUrl = d.telegramProof || d.telegramSupport; 
+                    
+                    minW = d.minWithdraw || 50; maxW = d.maxWithdraw || 10000;
+                    if(document.getElementById('w-limit-text')) document.getElementById('w-limit-text').innerText = `সর্বনিম্ন ৳${minW} - সর্বোচ্চ ৳${maxW}`;
+                    if(document.getElementById('niva-rate-disp')) document.getElementById('niva-rate-disp').innerText=`1000=${nivaRate}TK`;
+                    if(document.getElementById('payeer-rate-disp')) document.getElementById('payeer-rate-disp').innerText = payeerRate; 
+
+                    if(document.getElementById('method-bkash')) document.getElementById('method-bkash').style.display = d.methodBkash !== false ? 'flex' : 'none';
+                    if(document.getElementById('method-nagad')) document.getElementById('method-nagad').style.display = d.methodNagad !== false ? 'flex' : 'none';
+                    if(document.getElementById('method-niva')) document.getElementById('method-niva').style.display = d.methodNiva !== false ? 'flex' : 'none';
+                    if(document.getElementById('method-payeer')) document.getElementById('method-payeer').style.display = d.methodPayeer !== false ? 'flex' : 'none';
+
+                    const spinItem = document.getElementById('nav-spin-item'); if(spinItem) { if(d.methodSpinWheel === false) { spinItem.style.display = 'none'; if(document.getElementById('page-spin').classList.contains('active')) nav('page-home'); } else { spinItem.style.display = 'flex'; } }
+                    
+                    const adminBtn = document.getElementById('btn-admin-support');
+                    if(adminBtn && d.telegramSupport) { adminBtn.href = d.telegramSupport; adminBtn.classList.remove('hidden'); }
+                    
+                    const proofBtn = document.getElementById('btn-proof-link');
+                    if(proofBtn && proofBotUrl) proofBtn.href = proofBotUrl;
+                } 
+            });
+        }
+        
+        window.sendMoney = async () => {
+            const targetId = document.getElementById('tf-id').value.trim(); const amount = Number(document.getElementById('tf-amount').value);
+            if(!targetId || !amount || amount <= 0) return showToast("সঠিক তথ্য দিন"); if(amount > currentUserData.balance) return showToast("ব্যালেন্স নেই"); if(targetId === currentUserData.customId) return showToast("নিজেকে পাঠানো যাবে না");
+            const btn = document.getElementById('btn-transfer'); btn.disabled = true; btn.innerText = "Processing...";
+            try {
+                const q = query(collection(db, "users"), where("customId", "==", targetId)); const querySnapshot = await getDocs(q); if(querySnapshot.empty) { throw new Error("User Not Found (ভুল আইডি)"); }
+                const receiverDoc = querySnapshot.docs[0]; const receiverData = receiverDoc.data();
+                const batch = writeBatch(db);
+                batch.update(doc(db, "users", auth.currentUser.uid), { balance: increment(-amount) });
+                batch.update(doc(db, "users", receiverDoc.id), { balance: increment(amount) });
+                batch.set(doc(collection(db, "notifications")), { targetUid: auth.currentUser.uid, title: "Sent Money", body: `Sent ৳${amount} to ${receiverData.fullName} (${targetId})`, createdAt: serverTimestamp(), read: false });
+                batch.set(doc(collection(db, "notifications")), { targetUid: receiverDoc.id, title: "Received Money", body: `Received ৳${amount} from ${currentUserData.fullName} (${currentUserData.customId})`, createdAt: serverTimestamp(), read: false });
+                await batch.commit(); showToast("টাকা পাঠানো হয়েছে!"); document.getElementById('tf-id').value = ''; document.getElementById('tf-amount').value = ''; nav('page-home'); 
+            } catch(e) { showToast(e.message); } finally { btn.disabled = false; btn.innerText = "টাকা পাঠান"; }
+        }
+
+        window.switchHomeTab = (tab) => {
+            currentHomeTab = tab;
+            document.querySelectorAll('.home-tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(`ht-${tab}`).classList.add('active');
+            renderHomeTournaments();
+        }
+
+        function renderHomeTournaments() {
+            const l = document.getElementById('tournament-list'); 
+            l.innerHTML='';
+            const filtered = allTournaments.filter(d => { const t = d.data(); const cat = t.category || 'BR'; return cat === currentHomeTab; });
+            if(filtered.length === 0) { l.innerHTML = "<p style='text-align:center; color:#aaa; margin-top:20px; font-size:0.9rem;'>কোন ম্যাচ নেই</p>"; return; }
+            filtered.forEach(d=>{
+                const t=d.data();
+                const isJoined = joinedMatchIds.has(d.id);
+                let showFee = t.fee;
+                if(currentUserData && currentUserData.referBonusPending && t.type !== 'Squad') { showFee += 5; }
+                let btn;
+                if(isJoined) { btn = `<button class="btn btn-success" onclick="nav('page-matches')">আইডি পাস</button>`; } else if(t.joined >= t.total) { btn = `<button class="btn btn-secondary" disabled>FULL</button>`; } else { btn = `<button class="btn btn-primary" onclick="openJoin('${d.id}','${t.type}',${t.fee})">জয়েন (${t.type})</button>`; }
+                const percent = Math.min((t.joined/t.total)*100, 100);
+                let dateDisplay = t.date;
+                
+                l.innerHTML += `
+                <div class="t-card">
+                    <div class="t-img-wrap"><img src="${t.image}" class="t-img" loading="lazy"><div class="t-type-badge">${t.type}</div><div class="t-overlay"><div class="t-title">${t.title}</div></div></div>
+                    <div class="t-body">
+                        <div class="t-stats-grid">
+                            <div class="t-stat"><small>এন্ট্রি ফি</small><b>৳${showFee}</b></div>
+                            <div class="t-stat"><small>বাকি আছে</small><b>${t.total-t.joined}</b></div>
+                            <div class="t-stat"><small>সময়</small><b>${dateDisplay}</b></div>
+                        </div>
+                        <div class="progress-bar"><div class="progress-fill" style="width:${percent}%;"></div></div>
+                        <div class="t-actions">${btn}<button class="btn btn-secondary" onclick="showInfo('${(t.extraDetails||'').replace(/'/g,"\\'").replace(/\n/g,'<br>')}')">View Details</button></div>
+                    </div>
+                </div>`;
+            });
+        }
+
+        // OPTIMIZED SLIDER
+        function loadHomeData() {
+            onSnapshot(collection(db,"sliders"), s=>{ 
+                const c=document.getElementById('banner-slider'); 
+                c.innerHTML=''; 
+                s.forEach(d=>{c.innerHTML+=`<img src="${d.data().url}" class="slide" loading="lazy">`}); 
+                
+                if(sliderInterval) clearInterval(sliderInterval); 
+                if(s.size > 1) {
+                    sliderInterval=setInterval(()=>{
+                        if(c.scrollLeft + c.offsetWidth >= c.scrollWidth - 10) { 
+                            c.scrollTo({left: 0, behavior: 'smooth'}); 
+                        } else { 
+                            c.scrollBy({left: c.offsetWidth + 12, behavior: 'smooth'}); 
+                        }
+                    }, 4000); 
+                }
+            });
+            onSnapshot(query(collection(db,"tournaments"), orderBy("date","asc")), s=>{ allTournaments = s.docs; renderHomeTournaments(); });
+        }
+
+        function loadBalanceLeaderboard() { const q = query(collection(db, "users"), orderBy("balance", "desc"), limit(10)); onSnapshot(q, (s) => { const l = document.getElementById('balance-leaderboard'); if (s.empty) { l.innerHTML = "<p style='text-align:center;color:#aaa'>Empty</p>"; return; } l.innerHTML = s.docs.map((d, i) => { const u = d.data(); const rank = i + 1; let rankClass = rank <= 3 ? `top-${rank}` : ''; return `<div class="rank-item ${rankClass}"><div class="rank-left"><span class="rank-pos">#${rank}</span><div style="font-weight:bold; color:#fff;">${u.fullName || u.username}</div></div><div style="color:var(--success); font-weight:bold;">৳${u.balance}</div></div>`; }).join(''); }); }
+        function loadReferralLeaderboard() { const q = query(collection(db, "users"), orderBy("totalRefers", "desc"), limit(5)); onSnapshot(q, (s) => { const l = document.getElementById('referral-leaderboard'); if (s.empty) { l.innerHTML = "<p style='text-align:center;color:#aaa'>Empty</p>"; return; } l.innerHTML = s.docs.map((d, i) => `<div class="rank-item"><div class="rank-left"><span class="rank-pos">#${i+1}</span><div style="color:#fff;">${d.data().fullName || d.data().username}</div></div><div style="color:var(--warning); font-weight:bold;">${d.data().totalRefers} Refers</div></div>`).join(''); }); }
+
+        window.spinWheel = async () => {
+            if(spinProcessing) return;
+            const amtInput = document.getElementById('spin-amt'); const amt = parseInt(amtInput.value); const wheel = document.getElementById('spin-wheel');
+            if(!amt || amt < 1) return showToast("সঠিক পরিমাণ লিখুন"); if(amt > currentUserData.balance) return showToast("ব্যালেন্স নেই");
+            spinProcessing = true; document.getElementById('spin-btn').disabled = true;
+            try { await updateDoc(doc(db, "users", auth.currentUser.uid), { balance: increment(-amt) }); } catch(e) { showToast("Server Error"); spinProcessing = false; document.getElementById('spin-btn').disabled = false; return; }
+            const durationSec = 5 + Math.random() * 5; const durationMs = durationSec * 1000;
+            wheel.style.transition = `transform ${durationSec}s cubic-bezier(0.25, 0.1, 0.25, 1)`;
+            const spins = 8; const degreesPerSpin = 360;
+            let targetAngleFromTop = 10 + Math.random() * 70; const finalAngleRelToCircle = 360 - targetAngleFromTop;
+            let currentMod = currentRotation % 360; if(currentMod < 0) currentMod += 360; 
+            let addedRotation = (spins * degreesPerSpin) + (finalAngleRelToCircle - currentMod);
+            if (addedRotation < degreesPerSpin) addedRotation += degreesPerSpin;
+            currentRotation += addedRotation;
+            wheel.style.transform = `rotate(${currentRotation}deg)`;
+            setTimeout(async () => { showToast(`দুঃখিত! আপনি ${amt} টাকা হেরেছেন।`); spinProcessing = false; document.getElementById('spin-btn').disabled = false; }, durationMs + 100); 
+        }
+
+        window.openJoin = (id, type, fee) => {
+            selMatch = {id, type, fee};
+            document.getElementById('join-modal').classList.remove('hidden');
+            let displayFee = fee; if (type !== 'Squad' && currentUserData.referBonusPending) { displayFee += 5; }
+            document.getElementById('j-fee').innerText = `৳${displayFee}`;
+            if(type==='Squad') { document.getElementById('squad-tabs').classList.remove('hidden'); document.getElementById('squad-inputs').classList.remove('hidden'); switchTab('create'); } else { document.getElementById('squad-tabs').classList.add('hidden'); document.getElementById('squad-inputs').classList.add('hidden'); document.getElementById('view-create').classList.remove('hidden'); document.getElementById('view-join').classList.add('hidden'); }
+        }
+        window.switchTab = (t) => { document.querySelectorAll('.sq-tab').forEach(e=>e.classList.remove('active')); document.getElementById('tab-'+t).classList.add('active'); if(t==='create'){document.getElementById('view-create').classList.remove('hidden'); document.getElementById('view-join').classList.add('hidden');} else{document.getElementById('view-create').classList.add('hidden'); document.getElementById('view-join').classList.remove('hidden');} }
+
+        window.confirmJoin = async() => {
+            const uid=document.getElementById('j-uid').value; if(!uid)return showToast("Enter UID");
+            const btn = document.getElementById('btn-conf'); btn.disabled = true; btn.innerText = "Processing...";
+            try {
+                const checkJoin = await getDoc(doc(db, `users/${auth.currentUser.uid}/matches/${selMatch.id}`)); if(checkJoin.exists()) throw new Error("Already Joined!");
+                let totalFee = selMatch.fee; let isReferralPay = false;
+                if(selMatch.type !== 'Squad' && currentUserData.referBonusPending) { totalFee += 5; isReferralPay = true; }
+                const uRef=doc(db,"users",auth.currentUser.uid), tRef=doc(db,"tournaments",selMatch.id);
+                const uSnap=await getDoc(uRef); if(uSnap.data().balance < totalFee) throw new Error("Insufficient Balance");
+                const b=writeBatch(db); b.update(uRef,{balance:increment(-totalFee)}); b.update(tRef,{joined:increment(1)});
+                if(isReferralPay && currentUserData.referredBy) { b.update(uRef, { referBonusPending: false }); b.update(doc(db, "users", currentUserData.referredBy), { balance: increment(5), totalRefers: increment(1), referEarn: increment(5) }); b.set(doc(collection(db, "notifications")), { targetUid: currentUserData.referredBy, title: "Referral Bonus", body: `You earned ৳5 from referring ${currentUserData.fullName}`, createdAt: serverTimestamp(), read: false }); }
+                if(selMatch.type==='Squad'){
+                    const teamName = document.getElementById('j-team').value; if(!teamName) throw new Error("Enter Team Name");
+                    const randomCode = Math.floor(10000 + Math.random() * 90000); const joinCode = teamName.replace(/\s+/g, '') + randomCode;
+                    const tm=doc(collection(db,`tournaments/${selMatch.id}/teams`));
+                    b.set(tm,{teamName, joinCode, leaderUid:auth.currentUser.uid, leaderName:uSnap.data().username, members:[{uid:auth.currentUser.uid, name:uSnap.data().username, role:'leader', gameUid:uid}]});
+                    b.set(doc(db,`users/${auth.currentUser.uid}/matches/${selMatch.id}`),{tourneyId:selMatch.id, type:'squad', role:'leader', teamId:tm.id});
+                    b.set(doc(db,`tournaments/${selMatch.id}/participants/${auth.currentUser.uid}`),{uid:auth.currentUser.uid, username:uSnap.data().username, ffUid:uid});
+                    await b.commit(); closeJoin(); document.getElementById('gen-team-code').innerText = joinCode; document.getElementById('team-code-modal').classList.remove('hidden');
+                } else {
+                    b.set(doc(db,`users/${auth.currentUser.uid}/matches/${selMatch.id}`),{tourneyId:selMatch.id, type:'solo'});
+                    b.set(doc(db,`tournaments/${selMatch.id}/participants/${auth.currentUser.uid}`),{uid:auth.currentUser.uid, username:uSnap.data().username, ffUid:uid});
+                    await b.commit(); showToast("Joined Successfully!"); closeJoin(); nav('page-matches');
+                }
+            } catch(e){showToast(e.message); btn.disabled = false; btn.innerText = "Confirm";}
+        }
+
+        window.joinTeamMember = async() => {
+            const code=document.getElementById('m-code').value, uid=document.getElementById('m-uid').value; if(!code || !uid) return showToast("Fill all");
+            const checkJoin = await getDoc(doc(db, `users/${auth.currentUser.uid}/matches/${selMatch.id}`)); if(checkJoin.exists()) return showToast("Already Joined!");
+            const q=query(collection(db,`tournaments/${selMatch.id}/teams`), where("joinCode","==",code)); const s=await getDocs(q); if(s.empty) return showToast("Invalid Team Code");
+            const tm=s.docs[0]; if(tm.data().members.length>=4) return showToast("Team Full");
+            const b=writeBatch(db); const name = (await getDoc(doc(db,"users",auth.currentUser.uid))).data().username;
+            b.update(tm.ref,{members:arrayUnion({uid:auth.currentUser.uid, name:name, role:'member', gameUid:uid})});
+            b.set(doc(db,`users/${auth.currentUser.uid}/matches/${selMatch.id}`),{tourneyId:selMatch.id, type:'squad', role:'member', teamId:tm.id});
+            b.set(doc(db,`tournaments/${selMatch.id}/participants/${auth.currentUser.uid}`),{uid:auth.currentUser.uid, username:name, ffUid:uid});
+            await b.commit(); showToast("Joined!"); closeJoin(); nav('page-matches');
+        }
+        window.leave = async(tid, tmid) => { if(!confirm("Leave?")) return; const tmRef=doc(db,`tournaments/${tid}/teams`, tmid); const s=await getDoc(tmRef); const mems=s.data().members.filter(m=>m.uid!==auth.currentUser.uid); const b=writeBatch(db); b.update(tmRef,{members:mems}); b.delete(doc(db,`users/${auth.currentUser.uid}/matches/${tid}`)); b.delete(doc(db,`tournaments/${tid}/participants/${auth.currentUser.uid}`)); await b.commit(); }
+        
+        function loadMyMatches(uid) {
+            onSnapshot(collection(db, `users/${uid}/matches`), async (s) => {
+                joinedMatchIds.clear(); s.forEach(d => joinedMatchIds.add(d.data().tourneyId)); renderHomeTournaments();
+                const l = document.getElementById('my-matches-list'); if(s.empty) { l.innerHTML="<p style='text-align:center;color:#aaa;padding:20px;'>No matches joined</p>"; return; }
+                const htmls = await Promise.all(s.docs.map(async d=>{
+                    const m=d.data(); return new Promise(async resolve => {
+                        const tSnap = await getDoc(doc(db,"tournaments",m.tourneyId));
+                        if(!tSnap.exists()) { resolve(`<div class="t-card" style="border-color:red;padding:15px;text-align:center;">Match Removed</div>`); return; }
+                        const t = tSnap.data(); let extra = ""; let myGameUid = "N/A";
+
+                        if(m.type==='squad'){ 
+                            const tmSnap = await getDoc(doc(db,`tournaments/${m.tourneyId}/teams`, m.teamId)); 
+                            if(tmSnap.exists()){ 
+                                const tm = tmSnap.data(); 
+                                const myMem = tm.members.find(mem => mem.uid === uid);
+                                if(myMem) myGameUid = myMem.gameUid;
+                                extra = `<div style="background:rgba(255,255,255,0.05);padding:10px;border-radius:8px;margin-top:10px;font-size:0.9rem;">${m.role==='leader'?`<div style="background:rgba(245, 158, 11, 0.1);color:#fbbf24;padding:5px;text-align:center;border:1px dashed #fbbf24;margin-bottom:5px;border-radius:6px;">CODE: ${tm.joinCode}</div>`:''}<div>${tm.members.map(x=>`<div>${x.name} ${x.role==='leader'?'(L)':''}</div>`).join('')}</div>${m.role!=='leader'?`<button class="btn btn-danger" style="margin-top:5px;padding:5px;font-size:0.8rem" onclick="leave('${m.tourneyId}','${m.teamId}')">Leave</button>`:''}</div>`; 
+                            } 
+                        } else {
+                            const pSnap = await getDoc(doc(db, `tournaments/${m.tourneyId}/participants/${uid}`));
+                            if(pSnap.exists()) myGameUid = pSnap.data().ffUid;
+                        }
+
+                        const showRoomId = m.privateRoomId || t.roomId; const showPassword = m.privatePassword || t.password;
+                        let creds = `<div style="padding:12px;text-align:center;color:#aaa;border:1px dashed var(--glass-border);margin-top:10px;border-radius:8px;font-size:0.85rem;">রুম আইডি এবং পাসওয়ার্ড এর জন্য অপেক্ষা করুন</div>`;
+                        if(showRoomId && showPassword) { creds = `<div class="cred-panel" style="margin-top:10px;"><div class="cred-box"><span>ID: ${showRoomId}</span> <i class="fas fa-copy" style="color:var(--primary)" onclick="copyToClipboard('${showRoomId}')"></i></div><div class="cred-box"><span>PASS: ${showPassword}</span> <i class="fas fa-copy" style="color:var(--primary)" onclick="copyToClipboard('${showPassword}')"></i></div></div>`; }
+                        
+                        const proofBtn = `<button class="btn btn-primary" style="margin-top:12px; font-size:0.9rem;" onclick="handleProof('${currentUserData.customId}', '${myGameUid}', '${m.tourneyId}')"><i class="fas fa-check-circle"></i> প্রুফ দিন</button>`;
+
+                        resolve(`<div class="t-card"><div class="t-body"><h3 style="color:var(--primary); font-family:var(--font-gaming);">${t.title}</h3><small style="color:${t.status==='ongoing'?'var(--warning)':'#aaa'}">${t.status.toUpperCase()}</small>${extra}${creds}${proofBtn}</div></div>`);
+                    });
+                }));
+                l.innerHTML = htmls.join('');
+            });
+        }
+        
+        window.handleProof = (userId, gameUid, tourneyId) => {
+            const textToCopy = `User ID: ${userId}\nUid: ${gameUid}\nTournament ID: ${tourneyId}`;
+            window.copyToClipboard(textToCopy);
+            document.getElementById('proof-modal').classList.remove('hidden');
+        };
+
+        window.calcConversion = () => { 
+            const amtEl = document.getElementById('w-amt'); 
+            const methodEl = document.querySelector('input[name="w_method"]:checked'); 
+            
+            document.getElementById('niva-calc').style.display='none';
+            document.getElementById('payeer-calc').style.display='none';
+
+            if(methodEl && amtEl && amtEl.value) {
+                if(methodEl.value === 'Niva Coin') {
+                    document.getElementById('niva-calc').style.display='block';
+                    document.getElementById('niva-amount').innerText = Math.floor((amtEl.value / nivaRate)*1000);
+                } else if(methodEl.value === 'Payeer Dollar') {
+                    document.getElementById('payeer-calc').style.display='block';
+                    document.getElementById('payeer-amount').innerText = (amtEl.value / payeerRate).toFixed(2);
+                }
+            } 
+        }
+        
+        document.addEventListener('change', (e) => { if(e.target.name === 'w_method') window.calcConversion(); });
+        
+        window.doWithdraw = async () => {
+            const amtEl = document.getElementById('w-amt'); const numEl = document.getElementById('w-num'); const methodEl = document.querySelector('input[name="w_method"]:checked');
+            if(!methodEl) return showToast("Select Method"); if(!amtEl || !numEl || !amtEl.value || !numEl.value) return showToast("Fill all");
+            const a = Number(amtEl.value); const n = numEl.value; const m = methodEl.value;
+            if(a > currentUserData.balance) return showToast("Low Balance"); if(a < minW) return showToast(`সর্বনিম্ন উইথড্র ৳${minW}`); if(a > maxW) return showToast(`সর্বোচ্চ উইথড্র ৳${maxW}`);
+            const b=writeBatch(db); b.update(doc(db,"users",auth.currentUser.uid),{balance:increment(-a)}); b.set(doc(collection(db,"withdrawals")),{userId:auth.currentUser.uid, username:currentUserData.username, amount:a, number:n, method:m, status:"pending", time:serverTimestamp()});
+            await b.commit(); showToast("Requested"); nav('page-home');
+        }
+        function loadWithdrawHistory(uid){ onSnapshot(query(collection(db,"withdrawals"),where("userId","==",uid)),s=>{ const l = s.docs.sort((a,b)=>(b.data().time?.seconds||0)-(a.data().time?.seconds||0)); document.getElementById('withdraw-history').innerHTML = s.empty ? "<p style='text-align:center;color:#aaa'>No history</p>" : l.map(d=>{ const w=d.data(), c=w.status==='pending'?'var(--warning)':(w.status==='paid'?'var(--success)':'var(--danger)'); return `<div class="t-card" style="padding:15px;display:flex;justify-content:space-between;"><b>৳${w.amount} (${w.method})</b><span style="color:${c};font-weight:bold;">${w.status}</span></div>`; }).join(''); }); }
+        function loadNotifications(uid) { const q = query(collection(db, "notifications"), where("targetUid", "==", uid)); onSnapshot(q, (s) => { const list = s.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)); const unread = list.filter(n=>!n.read).length; document.getElementById('header-badge').style.display = unread ? 'block' : 'none'; document.getElementById('n-list').innerHTML = list.length ? list.map(n => { const bg = n.read ? 'var(--glass-bg)' : 'rgba(6, 182, 212, 0.1)'; return `<div class="t-card" style="padding:15px;background:${bg};border-color:${n.read?'var(--glass-border)':'var(--primary)'}"><b style="color:var(--primary)">${n.title}</b><p style="font-size:0.9rem;color:#ddd;margin-top:5px;">${n.body}</p></div>`; }).join('') : "<p style='text-align:center;color:#aaa'>Empty</p>"; }); }
+        window.openNotifications = async () => { nav('page-notifications'); const q = query(collection(db, "notifications"), where("targetUid", "==", auth.currentUser.uid), where("read", "==", false)); const snap = await getDocs(q); const batch = writeBatch(db); snap.forEach(d => batch.update(doc(db, "notifications", d.id), { read: true })); await batch.commit(); };
+        window.loadPublicCoupons = function(){ onSnapshot(query(collection(db,"coupons"),where("type","==","public")),s=>{ document.getElementById('public-coupons').innerHTML = s.empty?"<p style='text-align:center;color:#aaa'>None</p>":s.docs.map(d=>{ const c=d.data(), p=Math.min((c.used/c.max)*100,100); return `<div class="t-card" style="padding:15px; border-left:3px solid var(--success);"><div style="display:flex;justify-content:space-between;margin-bottom:10px;"><b style="font-family:monospace;font-size:1.3rem;letter-spacing:1px;">${c.code}</b><span style="color:var(--success);font-weight:bold;font-size:1.1rem;">+৳${c.bonus}</span></div><div style="height:6px;background:rgba(255,255,255,0.1);border-radius:3px;margin-bottom:5px;"><div style="height:100%;width:${p}%;background:var(--success);border-radius:3px;"></div></div><small style="color:var(--text-muted)">${c.used}/${c.max} used</small></div>`; }).join(''); }); }
+        window.redeemCoupon = async () => { const code = document.getElementById('coupon-code').value.trim(); if(!code) return showToast("Enter Code"); try { const q = query(collection(db, "coupons"), where("code", "==", code)); const snap = await getDocs(q); if(snap.empty) throw "Invalid Code"; const docSnap = snap.docs[0]; const data = docSnap.data(); if(data.used >= data.max) throw "Limit Reached"; const redRef = doc(db, `coupons/${docSnap.id}/redemptions/${auth.currentUser.uid}`); const redSnap = await getDoc(redRef); if(redSnap.exists()) throw "Already Used"; const batch = writeBatch(db); batch.update(docSnap.ref, { used: increment(1) }); batch.set(redRef, { redeemedAt: serverTimestamp() }); batch.update(doc(db, "users", auth.currentUser.uid), { balance: increment(data.bonus) }); batch.set(doc(collection(db, "notifications")), { targetUid: auth.currentUser.uid, title: "Redeemed", body: `You got ${data.bonus} TK`, createdAt: serverTimestamp(), read: false }); await batch.commit(); showToast("Success!"); } catch(e) { showToast(e.message || e); } }
+        window.showInfo = (d) => { document.getElementById('info-modal').classList.remove('hidden'); document.getElementById('info-text').innerText=d.replace(/<br>/g,'\n'); };
+        window.updateProfilePic=async()=>{ const u=document.getElementById('new-pic-url').value; if(u) await setDoc(doc(db,"users",auth.currentUser.uid),{photoURL:u},{merge:true}); showToast("Updated"); };
+        window.copyUsername=()=>copyToClipboard(currentUserData.username);
+        function loadBroadcasts() { onSnapshot(collection(db,"videos"), s=>{ document.getElementById('video-list').innerHTML = s.empty ? "<p style='text-align:center;color:#aaa'>No videos</p>" : s.docs.map(d=>`<div class="video-card"><iframe src="${d.data().link}" style="width:100%;height:200px;border:none;"></iframe><div class="video-title">${d.data().title}</div></div>`).join(''); }); }
+    </script>
+</body>
+</html>
